@@ -6,7 +6,7 @@ on:
       - main
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,7 +16,28 @@ jobs:
       - name: Build Docker image
         run: docker build -t devops-lab-app ./app
 
-      - name: Validate Kubernetes manifests
+      - name: Configure SSH
         run: |
-          kubectl apply --dry-run=client -f k8s/deployment.yml
-          kubectl apply --dry-run=client -f k8s/service.yml
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/devops-lab-key.pem
+          chmod 600 ~/.ssh/devops-lab-key.pem
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy application and Kubernetes files to EC2
+        run: |
+          ssh -i ~/.ssh/devops-lab-key.pem \
+            ec2-user@${{ secrets.EC2_HOST }} \
+            "rm -rf ~/devops-lab-deploy && mkdir -p ~/devops-lab-deploy"
+
+          scp -i ~/.ssh/devops-lab-key.pem -r \
+            app k8s \
+            ec2-user@${{ secrets.EC2_HOST }}:~/devops-lab-deploy/
+
+      - name: Deploy to Kubernetes
+        run: |
+          ssh -i ~/.ssh/devops-lab-key.pem \
+            ec2-user@${{ secrets.EC2_HOST }} \
+            'minikube image build -t devops-lab-app:latest ~/devops-lab-deploy/app && \
+             kubectl apply -f ~/devops-lab-deploy/k8s/deployment.yml && \
+             kubectl apply -f ~/devops-lab-deploy/k8s/service.yml && \
+             kubectl rollout status deployment/devops-app'
